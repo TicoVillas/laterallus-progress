@@ -1,0 +1,5 @@
+{
+  "name": "laterallus-progress",
+  "owner": { "name": "Tiago Villas" },
+  "plugins": [{ "name": "laterallus-progress", "source": "./" }]
+}
