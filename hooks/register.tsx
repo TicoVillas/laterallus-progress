@@ -263,7 +263,7 @@ function mainRow(a: Activity, t0: number): Row {
     const avg = timed.reduce((sum, s) => sum + (s.endedAt! - s.startedAt!), 0) / timed.length
     const pending = a.steps.filter(s => s.status === 'pending').length
     const currentLeft = curIdx >= 0 ? Math.max(0, avg - stepMs) : 0
-    eta = ` - ${clock(currentLeft + pending * avg)} ETA`
+    eta = ` ~${clock(currentLeft + pending * avg)} restantes`
   }
 
   return {

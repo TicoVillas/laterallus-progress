@@ -2,7 +2,7 @@
 
 Um mod para o Claude Code que mostra, logo acima da caixa de chat, barras de progresso para tudo o que está em andamento:
 
-- **Plano do Claude**: `Task Progress`, com a barra em gradiente laranja, o nome da etapa atual, `(x/y - tempo ETA)` e o tempo da etapa / tempo total da atividade.
+- **Plano do Claude**: `Task Progress`, com a barra em gradiente laranja, o nome da etapa atual, `(x/y ~tempo restantes)` e o tempo da etapa / tempo total da atividade.
 - **Subagentes nativos**: uma barra por subagente, com um crab segurando um notebook, um nome de uma figura histórica e uma cor própria. Mostra a tarefa do subagente e o andamento dele.
 - **Reviews do Codex**: uma barra azul com o pet do Codex para cada `/codex:review`, `/codex:adversarial-review` ou rescue do plugin do Codex, com a fase, as ações do Codex e, no fim, os achados.
 
