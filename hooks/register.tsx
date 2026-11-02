@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, Timer, ToolCallInput } from 'claude-code'
+import type { Elements, EngineInterface, Register, Timer, ToolCallInput } from 'claude-code'
 
-import type { Activity, AgentBar, CodexJob, Step, StepStatus } from '../types'
+import type { Activity, AgentBar, CodexJob, Step, StepStatus, TimelineEntry } from '../types'
 
 // Claude dark mode; o gradiente vai de um tom pastel até o tom forte da cor
 const ORANGE_LIGHT = '#F2C4A6'
@@ -93,6 +93,11 @@ function iconSvg(icon: Icon): string {
 // Altura e raio dos cantos da barra no desktop (px), próximos ao formato da band.
 const BAR_PX = 22
 const BAR_RADIUS = 6
+// A barra da Timeline: um terço da altura da barra da band.
+const THIN_BAR_PX = 7
+// O separador entre as entradas da Timeline: uma linha cinza leve, como a do rail.
+const DIVIDER = '#3A3936'
+const DIVIDER_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="1" viewBox="0 0 4000 1" preserveAspectRatio="none"><rect width="4000" height="1" fill="${DIVIDER}"/></svg>`
 
 function mix(a: string, b: string, k: number): string {
   const ch = (hex: string, i: number) => parseInt(hex.slice(1 + i * 2, 3 + i * 2), 16)
@@ -102,10 +107,8 @@ function mix(a: string, b: string, k: number): string {
 
 // Trilho arredondado com o preenchimento em gradiente. O SVG estica na horizontal;
 // o viewBox fica perto da largura real para os cantos não deformarem.
-function barSvg(ratio: number, light: string, strong: string): string {
+function barSvg(ratio: number, light: string, strong: string, h = BAR_PX, r = BAR_RADIUS): string {
   const w = 700
-  const h = BAR_PX
-  const r = BAR_RADIUS
   const fill = Math.max(0, Math.min(1, ratio)) * w
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" width="4000" height="${h}" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none">` +
@@ -127,6 +130,48 @@ const now = atom({ plugin: 'laterallus-progress', key: 'now' } as const, 0)
 const waiting = atom({ plugin: 'laterallus-progress', key: 'waiting' } as const, false)
 const agents = atom({ plugin: 'laterallus-progress', key: 'agents' } as const, [])
 const agentsStepKey = atom({ plugin: 'laterallus-progress', key: 'agentsStepKey' } as const, null)
+// A linha do tempo do painel: nada sai dela, ao contrário da band.
+const timeline = atom({ plugin: 'laterallus-progress', key: 'timeline' } as const, [])
+
+const PANE = 'laterallus-timeline'
+const PANE_TITLE = 'Timeline'
+
+// Copia o plano atual e cada barra de agente para a linha do tempo, uma linha por
+// atividade (pelo início), sem nunca tirar uma que já esteja lá.
+async function syncTimeline($: EngineInterface): Promise<void> {
+  const a = await read($, activity)
+  const list = await read($, agents)
+  const fresh: TimelineEntry[] = []
+  if (a && a.steps.length > 0) {
+    fresh.push({ key: `task-${a.startedAt}`, kind: 'task', startedAt: a.startedAt, activity: a, agent: null })
+  }
+  for (const g of list) {
+    fresh.push({ key: `agent-${g.id}`, kind: g.codex ? 'external' : 'agent', startedAt: g.startedAt, activity: null, agent: g })
+  }
+  if (fresh.length === 0) return
+  let isNewEntry = false
+  await update($, timeline, prev => {
+    const byKey = new Map(prev.map(x => [x.key, x] as const))
+    for (const x of fresh) {
+      if (!byKey.has(x.key)) isNewEntry = true
+      byKey.set(x.key, x)
+    }
+    return [...byKey.values()].sort((x, y) => x.startedAt - y.startedAt).slice(-300)
+  })
+  // Cada atividade nova abre a aba (ou só a mantém, se já estiver aberta).
+  if (isNewEntry) await openTimeline($)
+}
+
+// Abre a aba da linha do tempo; se o app não a colocar na tela, avisa o motivo uma vez.
+let lastOpenFailure: string | null = null
+
+async function openTimeline($: EngineInterface): Promise<void> {
+  const opened = await $.ui.open({ id: PANE, title: PANE_TITLE }).catch(() => null)
+  if (opened && !opened.isPlaced && opened.reason !== lastOpenFailure) {
+    lastOpenFailure = opened.reason
+    void $.ui.toast(`Timeline não abriu: ${opened.reason}. Use /timeline.`)
+  }
+}
 
 type PlanItem = { content: string; status: StepStatus }
 
@@ -238,6 +283,9 @@ type Row = {
   icon: Icon | null
   ratio: number
   label: string
+  // O nome da atividade (com ✓/✗) e a contagem entre parênteses, separados para a Timeline.
+  name: string
+  count: string
   right: string
   light: string
   strong: string
@@ -266,12 +314,16 @@ function mainRow(a: Activity, t0: number): Row {
     eta = ` ~${clock(currentLeft + pending * avg)} restantes`
   }
 
+  const name = `${a.endedAt !== null ? '✓ ' : ''}${current?.name ?? ''}`
+  const count = `${position}/${total}${eta}`
   return {
     key: 'main',
     left: 'Task Progress',
     icon: null,
     ratio: completed / total,
-    label: `${a.endedAt !== null ? '✓ ' : ''}${current?.name ?? ''} (${position}/${total}${eta})`,
+    label: `${name} (${count})`,
+    name,
+    count,
     right: `${clock(stepMs)} / ${clock(totalMs)}`,
     light: ORANGE_LIGHT,
     strong: ORANGE,
@@ -309,6 +361,8 @@ function codexRow(g: AgentBar, job: CodexJob, t0: number): Row {
     icon: { kind: 'codex', color: CODEX_BODY },
     ratio,
     label: `${g.endedAt === null ? '' : g.failed ? '✗ ' : '✓ '}${what} (${detail})`,
+    name: `${g.endedAt === null ? '' : g.failed ? '✗ ' : '✓ '}${what}`,
+    count: detail,
     right: clock(t - g.startedAt),
     light,
     strong,
@@ -340,6 +394,8 @@ function agentRow(g: AgentBar, t0: number): Row {
       icon: { kind: 'crab', color: strong },
       ratio: g.endedAt !== null && !g.failed ? 1 : completed / total,
       label: `${mark}${g.description} (${curIdx >= 0 ? curIdx + 1 : completed}/${total})`,
+      name: `${mark}${g.description}`,
+      count: `${curIdx >= 0 ? curIdx + 1 : completed}/${total}`,
       right: `${clock(stepMs)} / ${clock(totalMs)}`,
       light,
       strong,
@@ -355,10 +411,97 @@ function agentRow(g: AgentBar, t0: number): Row {
     icon: { kind: 'crab', color: strong },
     ratio: g.endedAt !== null && !g.failed ? 1 : busy,
     label: `${mark}${g.description} (${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'})`,
+    name: `${mark}${g.description}`,
+    count: `${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'}`,
     right: clock(totalMs),
     light,
     strong,
   }
+}
+
+// Uma barra no desktop: nome à esquerda, a barra com o nome da atividade no meio e o
+// tempo à direita. Usada pela band e pelo painel da linha do tempo.
+function desktopBar(ui: Elements['desktop'], r: Row, leftCells: number, rightCells: number) {
+  const { Box, Text, Svg } = ui
+  // Porcentagem inteira (o desktop recusa decimais), usada na barra e no corte do nome.
+  const pct = Math.round(r.ratio * 100)
+  // A camada escura é cortada na largura do preenchimento; por dentro ela volta à
+  // largura da barra inteira (100/pct) para o nome ficar no mesmo lugar da camada clara.
+  // O desktop aceita no máximo 3 dígitos de porcentagem: abaixo de 11% a camada escura
+  // pediria mais de 999% e fica de fora (o nome centralizado não chega tão à esquerda).
+  const inner = pct > 0 ? Math.round(10000 / pct) : 100
+  const hasDarkLayer = pct > 0 && inner <= 999
+  return (
+    <Box key={r.key} flexDirection="row" alignItems="center" gap={2}>
+      <Box flexShrink={0} width={leftCells} flexDirection="row" alignItems="center" gap={1}>
+        {r.icon ? (
+          <Svg
+            source={iconSvg(r.icon)}
+            alt={r.icon.kind === 'crab' ? 'crab' : 'Codex'}
+            width={CRAB_PIXELS[0]!.length * ICON_PX}
+            height={CRAB_PIXELS.length * ICON_PX}
+          />
+        ) : null}
+        <Text color={MUTED} bold wrap="truncate">{r.left}</Text>
+      </Box>
+      <Box position="relative" flexGrow={1} flexShrink={1} minWidth={0} marginX={1} justifyContent="center">
+        <Svg source={barSvg(pct / 100, r.light, r.strong)} alt={`${r.left}: ${r.label}, ${pct}%`} height={BAR_PX} />
+        <Box position="absolute" top={0} left={0} right={0} bottom={0} justifyContent="center" alignItems="center">
+          <Text color={ON_TRACK} bold wrap="truncate">{r.label}</Text>
+        </Box>
+        {hasDarkLayer ? (
+          <Box position="absolute" top={0} left={0} bottom={0} width={`${pct}%`} overflow="hidden">
+            <Box position="absolute" top={0} left={0} bottom={0} width={`${inner}%`} justifyContent="center" alignItems="center">
+              <Text color={ON_FILL} bold wrap="truncate">{r.label}</Text>
+            </Box>
+          </Box>
+        ) : null}
+      </Box>
+      <Box flexShrink={0} width={rightCells} justifyContent="flex-end">
+        <Text color={MUTED} wrap="truncate">{r.right}</Text>
+      </Box>
+    </Box>
+  )
+}
+
+// Terminal: a barra é montada célula a célula, com o gradiente cor a cor no trecho preenchido.
+function terminalBar(ui: Pick<Elements['terminal'], 'Box' | 'Text'>, r: Row, width: number, leftCells: number, rightCells: number) {
+  const { Box, Text } = ui
+  const shown = r.label.length > width - 2 ? `${r.label.slice(0, width - 3)}…` : r.label
+  const padL = Math.floor((width - shown.length) / 2)
+  const cells = (' '.repeat(padL) + shown).padEnd(width, ' ')
+  const filled = Math.round(r.ratio * width)
+  return (
+    <Box key={r.key} flexDirection="row">
+      <Text color={MUTED} bold>{` ${(r.icon ? `${r.icon.kind === 'crab' ? '🦀' : '🤖'} ${r.left}` : r.left).slice(0, leftCells).padEnd(leftCells)} `}</Text>
+      {[...cells.slice(0, filled)].map((ch, i) => (
+        <Text key={`f${i}`} color={ON_FILL} backgroundColor={mix(r.light, r.strong, width > 1 ? i / (width - 1) : 1)} bold>
+          {ch}
+        </Text>
+      ))}
+      <Text color={ON_TRACK} backgroundColor={TRACK} bold>{cells.slice(filled)}</Text>
+      <Text color={MUTED}>{`${r.right} `.padStart(rightCells)}</Text>
+    </Box>
+  )
+}
+
+// Hora do dia (HH:MM:SS) de um instante, no fuso da máquina.
+function timeOfDay(t: number): string {
+  const d = new Date(t)
+  return [d.getHours(), d.getMinutes(), d.getSeconds()].map(v => String(v).padStart(2, '0')).join(':')
+}
+
+const KIND_LABELS: Record<TimelineEntry['kind'], string> = {
+  task: 'Task',
+  agent: 'Sub-Agent',
+  external: 'External Agent',
+}
+
+// A barra de uma linha da linha do tempo, e quando ela começou e terminou.
+function timelineRow(x: TimelineEntry, t: number): { row: Row; endedAt: number | null } | null {
+  if (x.activity) return { row: { ...mainRow(x.activity, t), key: x.key, left: 'Progress' }, endedAt: x.activity.endedAt }
+  if (x.agent) return { row: { ...agentRow(x.agent, t), key: x.key }, endedAt: x.agent.endedAt }
+  return null
 }
 
 // O plugin do Codex roda as reviews por `node .../codex-companion.mjs review` (ou
@@ -473,6 +616,7 @@ async function pollCodex($: EngineInterface): Promise<void> {
         ),
       )
     }
+    await syncTimeline($)
   } finally {
     isCodexPolling = false
   }
@@ -495,6 +639,23 @@ function stopTick(): void {
 
 export const register: Register = on => {
   let mainWorking = false
+
+  // O painel da linha do tempo abre sozinho como uma aba; /timeline reabre se for fechado.
+  on('session.start', async ($, e, next) => {
+    const started = await next(e)
+    try {
+      await $.command.register({ name: 'timeline', description: 'Abre a linha do tempo das atividades do LaterallusCODE' })
+      void openTimeline($)
+    } catch {
+      // ignora: o progresso é só visual
+    }
+    return started
+  })
+
+  on('command.run', { command: 'timeline' }, async $ => {
+    await $.ui.open({ id: PANE, title: PANE_TITLE })
+    return { text: 'Linha do tempo aberta.' }
+  })
 
   on('prompt.submit', async ($, e, next) => {
     try {
@@ -538,6 +699,7 @@ export const register: Register = on => {
       })
       await update($, now, () => t)
       startTick($)
+      await syncTimeline($)
     } catch {
       // ignora: o progresso é só visual
     }
@@ -557,6 +719,7 @@ export const register: Register = on => {
         mainWorking = false
         await update($, waiting, () => false)
       }
+      await syncTimeline($)
       const list = await read($, agents)
       if (!mainWorking && list.every(g => g.endedAt !== null)) stopTick()
     } catch {
@@ -650,6 +813,8 @@ export const register: Register = on => {
       }
     } catch {
       // ignora: o progresso é só visual
+    } finally {
+      await syncTimeline($).catch(() => {})
     }
     return res
   })
@@ -672,6 +837,8 @@ export const register: Register = on => {
               icon: null,
               ratio: 0,
               label: 'Aguardando o próximo plano…',
+              name: 'Aguardando o próximo plano…',
+              count: '',
               right: `${clock(0)} / ${clock(0)}`,
               light: ORANGE_LIGHT,
               strong: ORANGE,
@@ -711,77 +878,107 @@ export const register: Register = on => {
     }
 
     if (e.surface === 'desktop') {
-      const { Box, Text, Svg } = $.ui.resolve(e)
-      const bar = (r: Row) => {
-        // Porcentagem inteira (o desktop recusa decimais), usada na barra e no corte do nome.
-        const pct = Math.round(r.ratio * 100)
-        // A camada escura é cortada na largura do preenchimento; por dentro ela volta à
-        // largura da barra inteira (100/pct) para o nome ficar no mesmo lugar da camada clara.
-        // O desktop aceita no máximo 3 dígitos de porcentagem: abaixo de 11% a camada escura
-        // pediria mais de 999% e fica de fora (o nome centralizado não chega tão à esquerda).
-        const inner = pct > 0 ? Math.round(10000 / pct) : 100
-        const hasDarkLayer = pct > 0 && inner <= 999
-        return (
-          <Box key={r.key} flexDirection="row" alignItems="center" gap={2}>
-            <Box flexShrink={0} width={LEFT_CELLS} flexDirection="row" alignItems="center" gap={1}>
-              {r.icon ? (
-                <Svg
-                  source={iconSvg(r.icon)}
-                  alt={r.icon.kind === 'crab' ? 'crab' : 'Codex'}
-                  width={CRAB_PIXELS[0]!.length * ICON_PX}
-                  height={CRAB_PIXELS.length * ICON_PX}
-                />
-              ) : null}
-              <Text color={MUTED} bold wrap="truncate">{r.left}</Text>
-            </Box>
-            <Box position="relative" flexGrow={1} flexShrink={1} minWidth={0} marginX={1} justifyContent="center">
-              <Svg source={barSvg(pct / 100, r.light, r.strong)} alt={`${r.left}: ${r.label}, ${pct}%`} height={BAR_PX} />
-              <Box position="absolute" top={0} left={0} right={0} bottom={0} justifyContent="center" alignItems="center">
-                <Text color={ON_TRACK} bold wrap="truncate">{r.label}</Text>
-              </Box>
-              {hasDarkLayer ? (
-                <Box position="absolute" top={0} left={0} bottom={0} width={`${pct}%`} overflow="hidden">
-                  <Box position="absolute" top={0} left={0} bottom={0} width={`${inner}%`} justifyContent="center" alignItems="center">
-                    <Text color={ON_FILL} bold wrap="truncate">{r.label}</Text>
-                  </Box>
-                </Box>
-              ) : null}
-            </Box>
-            <Box flexShrink={0} width={RIGHT_CELLS} justifyContent="flex-end">
-              <Text color={MUTED} wrap="truncate">{r.right}</Text>
-            </Box>
-          </Box>
-        )
-      }
+      const ui = $.ui.resolve(e)
+      const { Box } = ui
       return (
         <Box flexDirection="column" gap="sm" paddingX={1} paddingY="sm">
-          {rows.map(bar)}
+          {rows.map(r => desktopBar(ui, r, LEFT_CELLS, RIGHT_CELLS))}
         </Box>
       )
     }
 
     // Terminal: cada barra é montada célula a célula, com o gradiente cor a cor no trecho preenchido.
-    const { Box, Text } = $.ui.resolve(e)
+    const ui = $.ui.resolve(e)
     const rightCells = Math.max(RIGHT_CELLS, ...rows.map(r => r.right.length + 2))
     const width = Math.max(10, e.props.bodyColumns - (LEFT_CELLS + 2) - rightCells)
-    const bar = (r: Row) => {
-      const shown = r.label.length > width - 2 ? `${r.label.slice(0, width - 3)}…` : r.label
-      const padL = Math.floor((width - shown.length) / 2)
-      const cells = (' '.repeat(padL) + shown).padEnd(width, ' ')
-      const filled = Math.round(r.ratio * width)
+    return <ui.Box flexDirection="column">{rows.map(r => terminalBar(ui, r, width, LEFT_CELLS, rightCells))}</ui.Box>
+  })
+  // Linha do tempo, no estilo de um painel de agentes: cada plano, subagente e agente
+  // externo numa entrada própria, na ordem em que começou. Em cima o tipo e a contagem; no
+  // meio o que a atividade faz, na cor do tipo; embaixo uma barra fina e o horário de início / fim.
+  on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
+    const list = await read($, timeline)
+    const t = await read($, now)
+    const entries = list.flatMap(x => {
+      const shown = timelineRow(x, t)
+      if (!shown) return []
+      const r = shown.row
+      const kindColor = x.kind === 'task' ? ORANGE : r.strong
+      const span = `${timeOfDay(x.startedAt)} / ${shown.endedAt !== null ? timeOfDay(shown.endedAt) : '--:--:--'}`
+      const detail = [r.count, r.right].filter(Boolean).join(' · ')
+      return [{ key: x.key, kind: KIND_LABELS[x.kind], kindColor, span, detail, row: r }]
+    })
+
+    if (e.surface === 'desktop') {
+      const { Box, Text, Svg } = $.ui.resolve(e)
       return (
-        <Box key={r.key} flexDirection="row">
-          <Text color={MUTED} bold>{` ${(r.icon ? `${r.icon.kind === 'crab' ? '🦀' : '🤖'} ${r.left}` : r.left).slice(0, LEFT_CELLS).padEnd(LEFT_CELLS)} `}</Text>
-          {[...cells.slice(0, filled)].map((ch, i) => (
-            <Text key={`f${i}`} color={ON_FILL} backgroundColor={mix(r.light, r.strong, width > 1 ? i / (width - 1) : 1)} bold>
-              {ch}
-            </Text>
+        <Box flexDirection="column" gap="md" paddingX={1} paddingY="sm">
+          {entries.length === 0 ? <Text color={MUTED}>Nenhuma atividade ainda.</Text> : null}
+          {entries.map((x, i) => (
+            <Box key={x.key} flexDirection="column" gap="xs">
+              {i > 0 ? <Svg source={DIVIDER_SVG} alt="" height={1} /> : null}
+              <Box flexDirection="row" justifyContent="space-between" gap={1}>
+                <Text color={MUTED} bold>{x.kind}</Text>
+                <Text color={MUTED} wrap="truncate">{x.detail}</Text>
+              </Box>
+              <Box flexDirection="row" alignItems="center" gap={1}>
+                {x.row.icon ? (
+                  <Svg
+                    source={iconSvg(x.row.icon)}
+                    alt={x.row.icon.kind === 'crab' ? 'crab' : 'Codex'}
+                    width={CRAB_PIXELS[0]!.length * ICON_PX}
+                    height={CRAB_PIXELS.length * ICON_PX}
+                  />
+                ) : null}
+                {x.row.icon ? <Text color={x.kindColor} bold>{x.row.left}</Text> : null}
+                <Box flexGrow={1} flexShrink={1} minWidth={0}>
+                  <Text color={x.kindColor} bold={!x.row.icon} wrap="truncate">{x.row.name}</Text>
+                </Box>
+              </Box>
+              <Svg
+                source={barSvg(x.row.ratio, x.row.light, x.row.strong, THIN_BAR_PX, THIN_BAR_PX / 2)}
+                alt={`${x.row.name}: ${Math.round(x.row.ratio * 100)}%`}
+                height={THIN_BAR_PX}
+              />
+              <Box flexDirection="row" justifyContent="flex-end">
+                <Text color={MUTED}>{x.span}</Text>
+              </Box>
+            </Box>
           ))}
-          <Text color={ON_TRACK} backgroundColor={TRACK} bold>{cells.slice(filled)}</Text>
-          <Text color={MUTED}>{`${r.right} `.padStart(rightCells)}</Text>
         </Box>
       )
     }
-    return <Box flexDirection="column">{rows.map(bar)}</Box>
+
+    // Terminal: as mesmas três linhas em texto, a barra como uma fileira de ━.
+    const { Box, Text } = $.ui.resolve(e)
+    const cells = Math.max(10, e.props.bodyColumns - 2)
+    return (
+      <Box flexDirection="column">
+        {entries.length === 0 ? <Text color={MUTED}>Nenhuma atividade ainda.</Text> : null}
+        {entries.map((x, i) => {
+          const filled = Math.round(x.row.ratio * cells)
+          const who = x.row.icon ? `${x.row.icon.kind === 'crab' ? '🦀' : '🤖'} ${x.row.left} · ` : ''
+          return (
+            <Box key={x.key} flexDirection="column" marginBottom={1}>
+              {i > 0 ? <Text color={DIVIDER}>{'─'.repeat(cells + 1)}</Text> : null}
+              <Box flexDirection="row" justifyContent="space-between">
+                <Text color={MUTED} bold>{` ${x.kind}`}</Text>
+                <Text color={MUTED} wrap="truncate-end">{`${x.detail} `}</Text>
+              </Box>
+              <Text color={x.kindColor} bold wrap="truncate-end">{` ${who}${x.row.name}`}</Text>
+              <Text>
+                {' '}
+                {Array.from({ length: cells }, (_, i) => (
+                  <Text key={`c${i}`} color={i < filled ? mix(x.row.light, x.row.strong, i / (cells - 1)) : TRACK}>━</Text>
+                ))}
+              </Text>
+              <Box flexDirection="row" justifyContent="flex-end">
+                <Text color={MUTED}>{`${x.span} `}</Text>
+              </Box>
+            </Box>
+          )
+        })}
+      </Box>
+    )
   })
 }

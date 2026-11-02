@@ -1,7 +1,9 @@
 {
   "name": "laterallus-progress",
-  "version": "0.1.2",
-  "description": "LaterallusCODE: barras de progresso acima do prompt para o plano do Claude, cada subagente nativo e as reviews do Codex, com etapas, tempos e tempo estimado.",
-  "author": { "name": "Tiago Villas" },
+  "version": "0.2.0",
+  "description": "LaterallusCODE: barras de progresso acima do prompt e uma aba Timeline com o histórico de cada plano do Claude, subagente nativo e review do Codex, com etapas, tempos e tempo estimado.",
+  "author": {
+    "name": "Tiago Villas"
+  },
   "types": "./types/index.d.ts"
 }

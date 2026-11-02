@@ -8,6 +8,17 @@ Um mod para o Claude Code que mostra, logo acima da caixa de chat, barras de pro
 
 As barras começam vazias, não somem ao terminar e ficam até começar uma nova atividade. Enquanto há uma pergunta aberta acima do prompt, a band vira uma versão compacta em texto.
 
+## Timeline
+
+Uma aba lateral, **Timeline**, abre sozinha e guarda o histórico da sessão: cada plano (**Task**), subagente (**Sub-Agent**) e review do Codex (**External Agent**) ganha uma entrada própria, em ordem de início, e nada sai dela. Cada entrada mostra:
+
+- o tipo e a contagem (etapas, ferramentas ou ações do Codex) com os tempos;
+- o nome da atividade na cor do tipo, com o ícone e o nome do agente quando é um agente;
+- uma barra fina de progresso;
+- o horário de início / fim.
+
+Se a aba for fechada, `/timeline` abre de novo.
+
 Funciona no app desktop (aba Code) e no terminal.
 
 ## Instalação

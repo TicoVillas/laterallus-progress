@@ -37,6 +37,16 @@ export type CodexJob = {
   findings: string[] | null
 }
 
+// Uma linha da linha do tempo do painel: um plano do Claude, um subagente nativo ou um
+// agente externo (o Codex). Fica para sempre na sessão, na ordem em que começou.
+export type TimelineEntry = {
+  key: string
+  kind: 'task' | 'agent' | 'external'
+  startedAt: number
+  activity: Activity | null
+  agent: AgentBar | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'laterallus-progress': {
@@ -45,6 +55,7 @@ declare module 'claude-code' {
       waiting: boolean
       agents: AgentBar[]
       agentsStepKey: string | null
+      timeline: TimelineEntry[]
     }
   }
 }
