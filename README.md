@@ -6,16 +6,16 @@ Um mod para o Claude Code que mostra, logo acima da caixa de chat, barras de pro
 - **Subagentes nativos**: uma barra por subagente, com um crab segurando um notebook, um nome de uma figura histórica e uma cor própria. Mostra a tarefa do subagente e o andamento dele.
 - **Reviews do Codex**: uma barra azul com o pet do Codex para cada `/codex:review`, `/codex:adversarial-review` ou rescue do plugin do Codex, com a fase, as ações do Codex e, no fim, os achados.
 
-A band mostra tudo o que está rodando, sem limite. De cada tipo (task, subagente, agente externo) sem nada rodando, fica só o último que terminou ou foi cancelado; quando algo desse tipo começa, ele toma o lugar. O resto fica na Timeline. Embaixo das barras, uma linha de totais mostra, para tasks (o crab laranja com bloco de notas), subagentes e agentes externos, quantos estão `rodando / encerrados / total`. Enquanto há uma pergunta aberta acima do prompt, a band vira uma versão compacta em texto.
+A band mostra tudo o que está rodando, sem limite. De cada tipo (task, subagente, agente externo) sem nada rodando, fica só o último que terminou ou foi cancelado; quando algo desse tipo começa, ele toma o lugar. O resto fica na Timeline. Embaixo das barras, uma linha de totais mostra, para tasks (o crab laranja com bloco de notas), subagentes e agentes externos, quantos estão `rodando / encerrados / total`; ao lado das tasks, entre parênteses, o total de tokens do Claude na sessão, atualizado a cada resposta do modelo. Enquanto há uma pergunta aberta acima do prompt, a band vira uma versão compacta em texto.
 
 ## Timeline
 
 Uma aba lateral, **Timeline**, abre sozinha e guarda o histórico da sessão: cada plano (**Task**), subagente (**Sub-Agent**) e review do Codex (**External Agent**) ganha uma entrada própria e nada sai dela. As entradas ficam agrupadas em **Running**, **Completed** e **Canceled**, cada grupo em ordem de início; um plano que fica pela metade quando outro começa vai para Canceled. Cada entrada mostra:
 
-- o tipo e a contagem (etapas, ferramentas ou ações do Codex) com os tempos;
+- o tipo e, à direita, a contagem (etapas, ferramentas ou ações do Codex), os tempos e o horário de início / fim;
 - o ícone, o nome de quem roda na cor do tipo (**Claude** em laranja numa task, o nome do agente num agente), `-` e o nome da atividade em cinza negrito;
 - uma barra fina de progresso;
-- à direita, o estado e o horário de início / fim: `Running` em amarelo enquanto roda, depois `✓ Success` em verde, `✗ Failed` ou `✗ Canceled` em vermelho.
+- à direita, o modelo, os tokens e o estado, como `Opus 5.5 - 12.3k tokens - ✓ Success`: `Running` em amarelo enquanto roda, depois `✓ Success` em verde, `✗ Failed` ou `✗ Canceled` em vermelho.
 
 Se a aba for fechada, `/timeline` abre de novo.
 
@@ -41,4 +41,5 @@ claude plugin install laterallus-progress --marketplace TicoVillas/laterallus-pr
 
 - **Plano**: as ferramentas de lista de tarefas do Claude (`TodoWrite`, `TaskCreate`/`TaskUpdate` e a lista de tarefas do app desktop).
 - **Subagentes**: o início de cada subagente, as ferramentas que ele usa e o fim dele. Sem um plano próprio do subagente, a barra avança com as ferramentas usadas, sem passar de 90%, e só enche quando ele termina.
-- **Codex**: os registros que o plugin do Codex grava para cada job (fase, log de ações e resultado), lidos a cada 2 segundos.
+- **Codex**: os registros que o plugin do Codex grava para cada job (fase, log de ações e resultado), lidos a cada 2 segundos; o modelo e os tokens vêm do log da sessão do Codex.
+- **Tokens**: a cada resposta do modelo, o motor informa o que ela custou. Conta a entrada nova, a escrita em cache e a saída; as releituras do cache ficam de fora, porque repetem o contexto a cada passo. Um plano soma as respostas do loop principal enquanto roda, e cada subagente soma as suas.

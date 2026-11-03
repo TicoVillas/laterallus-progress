@@ -12,6 +12,9 @@ export type Activity = {
   steps: Step[]
   startedAt: number
   endedAt: number | null
+  // Tokens (entrada + escrita em cache + saída) gastos enquanto o plano rodava, e o modelo.
+  tokens?: number
+  model?: string | null
 }
 
 // Um subagente nativo: o nome de filósofo e a cor ficam com ele até a barra sair.
@@ -26,6 +29,9 @@ export type AgentBar = {
   // Com failed: foi interrompido ou cancelado, não um erro.
   canceled?: boolean
   tools: number
+  // Tokens (entrada + escrita em cache + saída) do agente e o modelo que ele usou.
+  tokens?: number
+  model?: string | null
   plan: Activity | null
   // Só numa barra do Codex: o job que o plugin do Codex registrou para a review.
   codex?: CodexJob
@@ -60,6 +66,8 @@ declare module 'claude-code' {
       agents: AgentBar[]
       agentsStepKey: string | null
       timeline: TimelineEntry[]
+      // Tokens do Claude na sessão (loop principal e subagentes): entrada + escrita em cache + saída.
+      sessionTokens: number
     }
   }
 }

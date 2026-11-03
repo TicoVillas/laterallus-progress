@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { Elements, EngineInterface, Register, Timer, ToolCallInput } from 'claude-code'
+import type { Elements, EngineInterface, ModelUsage, Register, Timer, ToolCallInput } from 'claude-code'
 
 import type { Activity, AgentBar, CodexJob, Step, StepStatus, TimelineEntry } from '../types'
 
@@ -158,6 +158,7 @@ const agents = atom({ plugin: 'laterallus-progress', key: 'agents' } as const, [
 const agentsStepKey = atom({ plugin: 'laterallus-progress', key: 'agentsStepKey' } as const, null)
 // A linha do tempo do painel: nada sai dela, ao contrário da band.
 const timeline = atom({ plugin: 'laterallus-progress', key: 'timeline' } as const, [])
+const sessionTokens = atom({ plugin: 'laterallus-progress', key: 'sessionTokens' } as const, 0)
 
 const PANE = 'laterallus-timeline'
 const PANE_TITLE = 'Timeline'
@@ -324,6 +325,9 @@ type Row = {
   // para a Timeline; o label junta tudo para a barra.
   name: string
   mark: Mark
+  // O modelo e os tokens da atividade, para a última linha da Timeline.
+  model: string | null
+  tokens: number | null
   count: string
   right: string
   light: string
@@ -353,6 +357,26 @@ function statusColor(m: Mark): string {
 
 function markPrefix(m: Mark): string {
   return m ? `${MARK_TEXT[m]} ` : ''
+}
+
+// O que conta como gasto: entrada nova, escrita em cache e saída. As releituras do cache
+// repetem o contexto a cada passo e ficam de fora.
+function spent(u: ModelUsage): number {
+  return u.input_tokens + u.cache_creation_input_tokens + u.output_tokens
+}
+
+function tokensText(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M tokens`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k tokens`
+  return `${n} tokens`
+}
+
+// `claude-opus-5-5` vira `Opus 5.5`; outro id (o do Codex) fica como veio.
+function modelText(id: string): string {
+  const m = /^claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$/.exec(id)
+  if (!m) return id
+  const family = m[1]!.charAt(0).toUpperCase() + m[1]!.slice(1)
+  return `${family} ${m[2]}${m[3] ? `.${m[3]}` : ''}`
 }
 
 function mainRow(a: Activity, t0: number): Row {
@@ -389,6 +413,8 @@ function mainRow(a: Activity, t0: number): Row {
     label: `${markPrefix(mark)}${name} (${count})`,
     name,
     mark,
+    model: a.model ?? null,
+    tokens: a.tokens ?? 0,
     count,
     right: `${clock(stepMs)} / ${clock(totalMs)}`,
     light: ORANGE_LIGHT,
@@ -430,6 +456,8 @@ function codexRow(g: AgentBar, job: CodexJob, t0: number): Row {
     label: `${markPrefix(mark)}${what} (${detail})`,
     name: what,
     mark,
+    model: g.model ?? null,
+    tokens: g.tokens ?? null,
     count: detail,
     right: clock(t - g.startedAt),
     light,
@@ -464,6 +492,8 @@ function agentRow(g: AgentBar, t0: number): Row {
       label: `${markPrefix(mark)}${g.description} (${curIdx >= 0 ? curIdx + 1 : completed}/${total})`,
       name: g.description,
       mark,
+      model: g.model ?? null,
+      tokens: g.tokens ?? 0,
       count: `${curIdx >= 0 ? curIdx + 1 : completed}/${total}`,
       right: `${clock(stepMs)} / ${clock(totalMs)}`,
       light,
@@ -482,6 +512,8 @@ function agentRow(g: AgentBar, t0: number): Row {
     label: `${markPrefix(mark)}${g.description} (${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'})`,
     name: g.description,
     mark,
+    model: g.model ?? null,
+    tokens: g.tokens ?? 0,
     count: `${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'}`,
     right: clock(totalMs),
     light,
@@ -627,6 +659,7 @@ type CodexRecord = {
   completedAt?: string
   logFile?: string | null
   rendered?: string
+  threadId?: string
 }
 
 // Lê os jobs mais recentes do plugin do Codex; [] em qualquer erro.
@@ -661,6 +694,35 @@ function codexFindings(rendered: string | undefined): string[] | null {
   const found = [...rendered.matchAll(/\[(P\d)\]/g)].map(m => m[1]!)
   if (found.length > 0) return found
   return /no (?:issues|findings)|did not (?:find|identify)|looks good|nenhum/i.test(rendered) ? [] : null
+}
+
+// O modelo e os tokens de um job do Codex, do log da sessão dele: a última contagem
+// acumulada, com a mesma regra do Claude (entrada sem o que veio do cache, mais a saída).
+async function codexUsage($: EngineInterface, threadId: string | undefined): Promise<{ model: string | null; tokens: number } | null> {
+  if (!threadId || !/^[0-9a-f-]+$/i.test(threadId)) return null
+  const r = await $.process
+    .run(
+      [
+        'sh',
+        '-c',
+        `f=$(ls -t "\${CODEX_HOME:-$HOME/.codex}"/sessions/*/*/*/*-${threadId}.jsonl 2>/dev/null | head -n 1); [ -n "$f" ] || exit 1; grep -o '"model":"[^"]*"' "$f" | tail -n 1; grep '"total_token_usage"' "$f" | tail -n 1`,
+      ],
+      { timeoutMs: 5_000 },
+    )
+    .catch(() => null)
+  if (!r || r.exitCode !== 0) return null
+  const model = /"model":"([^"]*)"/.exec(r.stdout)?.[1] ?? null
+  const total = /"total_token_usage":(\{[^}]*\})/.exec(r.stdout)?.[1]
+  let tokens = 0
+  if (total) {
+    try {
+      const u = JSON.parse(total) as { input_tokens?: number; cached_input_tokens?: number; output_tokens?: number }
+      tokens = (u.input_tokens ?? 0) - (u.cached_input_tokens ?? 0) + (u.output_tokens ?? 0)
+    } catch {
+      // uma linha cortada no meio: fica para a próxima leitura
+    }
+  }
+  return { model, tokens }
 }
 
 let codexPoller: Timer | null = null
@@ -699,6 +761,7 @@ async function pollCodex($: EngineInterface): Promise<void> {
       }
       if (!rec) continue
       const actions = await codexActions($, rec.logFile)
+      const usage = await codexUsage($, rec.threadId)
       const isOver = rec.status === 'completed' || rec.status === 'failed' || rec.status === 'cancelled'
       const t = await $.clock.now()
       const endedAt = isOver ? Date.parse(rec.completedAt ?? '') || t : null
@@ -713,6 +776,8 @@ async function pollCodex($: EngineInterface): Promise<void> {
                 endedAt: x.endedAt ?? endedAt,
                 failed: isOver && rec!.status !== 'completed',
                 canceled: isOver && rec!.status === 'cancelled',
+                model: usage?.model ?? x.model ?? null,
+                tokens: usage ? usage.tokens : x.tokens,
                 codex: { ...job, jobId: recId, phase, actions, findings },
               }
             : x,
@@ -807,6 +872,31 @@ export const register: Register = on => {
       // ignora: o progresso é só visual
     }
     return res
+  })
+
+  // Cada passo do modelo soma os tokens dele: na sessão, e no subagente que o fez ou no
+  // plano em andamento. A conta aparece assim que a resposta do passo chega.
+  on('turn.step', async function* ($, e, next) {
+    const r = yield* next(e)
+    try {
+      if (r.usage) {
+        const n = spent(r.usage)
+        const model = r.usage.model
+        await update($, sessionTokens, total => total + n)
+        if (e.agentId) {
+          const agentId = e.agentId
+          await update($, agents, prev =>
+            prev.map(g => (g.id === agentId ? { ...g, tokens: (g.tokens ?? 0) + n, model } : g)),
+          )
+        } else {
+          await update($, activity, a => (a && a.endedAt === null ? { ...a, tokens: (a.tokens ?? 0) + n, model } : a))
+        }
+        await syncTimeline($)
+      }
+    } catch {
+      // ignora: o progresso é só visual
+    }
+    return r
   })
 
   on('turn.complete', async ($, e, next) => {
@@ -954,6 +1044,9 @@ export const register: Register = on => {
       return next(e)
     }
     const totals = totalsOf(history)
+    // Ao lado do total de tasks, os tokens do Claude na sessão.
+    const tokens = await read($, sessionTokens)
+    const totalText = (x: Totals) => (x.kind === 'task' ? `${x.text} (${tokensText(tokens)})` : x.text)
 
     // Com uma pergunta na band, o engine aceita só um tree sem larguras, alturas ou posições,
     // com a pergunta dele embaixo: as barras viram uma linha de texto cada, sem sumir.
@@ -981,7 +1074,7 @@ export const register: Register = on => {
           {rows.map(line)}
           <Box key="totals" flexDirection="row" gap={3}>
             {totals.map(x => (
-              <Text key={x.kind} color={MUTED}>{`${iconEmoji(x.icon)} ${x.text}`}</Text>
+              <Text key={x.kind} color={MUTED}>{`${iconEmoji(x.icon)} ${totalText(x)}`}</Text>
             ))}
           </Box>
           {below}
@@ -1005,7 +1098,7 @@ export const register: Register = on => {
                   width={CRAB_PIXELS[0]!.length * ICON_PX}
                   height={CRAB_PIXELS.length * ICON_PX}
                 />
-                <Text color={MUTED} bold>{x.text}</Text>
+                <Text color={MUTED} bold>{totalText(x)}</Text>
               </Box>
             ))}
           </Box>
@@ -1022,7 +1115,7 @@ export const register: Register = on => {
         {rows.map(r => terminalBar(ui, r, width, LEFT_CELLS, rightCells))}
         <ui.Box key="totals" flexDirection="row" justifyContent="space-between" paddingX={1}>
           {totals.map(x => (
-            <ui.Text key={x.kind} color={MUTED} bold>{`${iconEmoji(x.icon)} ${x.text}`}</ui.Text>
+            <ui.Text key={x.kind} color={MUTED} bold>{`${iconEmoji(x.icon)} ${totalText(x)}`}</ui.Text>
           ))}
         </ui.Box>
       </ui.Box>
@@ -1030,9 +1123,9 @@ export const register: Register = on => {
   })
   // Linha do tempo, no estilo de um painel de agentes: cada plano, subagente e agente
   // externo numa entrada própria, agrupadas em Running, Completed e Canceled e, dentro de
-  // cada grupo, na ordem em que começaram. Em cima o tipo e a contagem; depois quem roda, na
-  // cor do tipo, e o que a atividade faz, em cinza; depois uma barra fina e, embaixo, à
-  // direita, o estado e o horário de início / fim.
+  // cada grupo, na ordem em que começaram. Em cima o tipo, a contagem, a duração e o horário
+  // de início / fim; depois quem roda, na cor do tipo, e o que a atividade faz, em cinza;
+  // depois uma barra fina e, embaixo, à direita, o modelo, os tokens e o estado.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const list = await read($, timeline)
     const t = await read($, now)
@@ -1042,8 +1135,12 @@ export const register: Register = on => {
       const r = shown.row
       const kindColor = x.kind === 'task' ? ORANGE : r.strong
       const span = `${timeOfDay(x.startedAt)} / ${shown.endedAt !== null ? timeOfDay(shown.endedAt) : '--:--:--'}`
-      const detail = [r.count, r.right].filter(Boolean).join(' · ')
-      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, span, detail, row: r }]
+      const detail = [r.count, r.right, span].filter(Boolean).join(' · ')
+      // A última linha: o modelo, os tokens e o estado, separados por -.
+      const usage = [r.model ? modelText(r.model) : null, r.tokens !== null ? tokensText(r.tokens) : null].filter(
+        (v): v is string => v !== null,
+      )
+      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, detail, usage, row: r }]
     })
     type Entry = (typeof entries)[number]
     const groups = (['running', 'completed', 'canceled'] as const)
@@ -1080,9 +1177,8 @@ export const register: Register = on => {
             height={THIN_BAR_PX}
           />
           <Box flexDirection="row" justifyContent="flex-end" gap={1}>
+            {x.usage.length > 0 ? <Text color={MUTED} wrap="truncate">{`${x.usage.join(' - ')} -`}</Text> : null}
             <Text color={statusColor(x.row.mark)} bold>{statusText(x.row.mark)}</Text>
-            <Text color={MUTED}>-</Text>
-            <Text color={MUTED}>{x.span}</Text>
           </Box>
         </Box>
       )
@@ -1125,8 +1221,8 @@ export const register: Register = on => {
             ))}
           </Text>
           <Box flexDirection="row" justifyContent="flex-end">
-            <Text color={statusColor(x.row.mark)} bold>{statusText(x.row.mark)}</Text>
-            <Text color={MUTED}>{` - ${x.span} `}</Text>
+            {x.usage.length > 0 ? <Text color={MUTED}>{`${x.usage.join(' - ')} - `}</Text> : null}
+            <Text color={statusColor(x.row.mark)} bold>{`${statusText(x.row.mark)} `}</Text>
           </Box>
         </Box>
       )
