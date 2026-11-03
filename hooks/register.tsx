@@ -340,6 +340,17 @@ function agentMark(g: AgentBar): Mark {
   return g.endedAt === null ? null : !g.failed ? 'ok' : g.canceled ? 'cancel' : 'fail'
 }
 
+const RUNNING_COLOR = '#E0B04A'
+
+// O estado na Timeline: Running enquanto roda, depois o resultado com a marca.
+function statusText(m: Mark): string {
+  return m ? `${MARK_TEXT[m]} ${MARK_LABELS[m]}` : 'Running'
+}
+
+function statusColor(m: Mark): string {
+  return m ? MARK_COLORS[m] : RUNNING_COLOR
+}
+
 function markPrefix(m: Mark): string {
   return m ? `${MARK_TEXT[m]} ` : ''
 }
@@ -562,9 +573,9 @@ function timelineRow(x: TimelineEntry, t: number): { row: Row; endedAt: number |
     // Os tempos param no cancelamento, e a marca é ✗.
     const row = mainRow(x.activity, x.cancelledAt)
     const label = `${markPrefix('cancel')}${row.name} (${row.count})`
-    return { row: { ...row, key: x.key, left: 'Progress', icon: TASK_ICON, mark: 'cancel', label }, endedAt: x.cancelledAt }
+    return { row: { ...row, key: x.key, left: 'Claude', icon: TASK_ICON, mark: 'cancel', label }, endedAt: x.cancelledAt }
   }
-  if (x.activity) return { row: { ...mainRow(x.activity, t), key: x.key, left: 'Progress', icon: TASK_ICON }, endedAt: x.activity.endedAt }
+  if (x.activity) return { row: { ...mainRow(x.activity, t), key: x.key, left: 'Claude', icon: TASK_ICON }, endedAt: x.activity.endedAt }
   if (x.agent) return { row: { ...agentRow(x.agent, t), key: x.key }, endedAt: x.agent.endedAt }
   return null
 }
@@ -1019,8 +1030,9 @@ export const register: Register = on => {
   })
   // Linha do tempo, no estilo de um painel de agentes: cada plano, subagente e agente
   // externo numa entrada própria, agrupadas em Running, Completed e Canceled e, dentro de
-  // cada grupo, na ordem em que começaram. Em cima o tipo e a contagem; no meio o que a
-  // atividade faz, na cor do tipo; embaixo uma barra fina e o horário de início / fim.
+  // cada grupo, na ordem em que começaram. Em cima o tipo e a contagem; depois quem roda, na
+  // cor do tipo, e o que a atividade faz, em cinza; depois uma barra fina e, embaixo, à
+  // direita, o estado e o horário de início / fim.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const list = await read($, timeline)
     const t = await read($, now)
@@ -1031,8 +1043,7 @@ export const register: Register = on => {
       const kindColor = x.kind === 'task' ? ORANGE : r.strong
       const span = `${timeOfDay(x.startedAt)} / ${shown.endedAt !== null ? timeOfDay(shown.endedAt) : '--:--:--'}`
       const detail = [r.count, r.right].filter(Boolean).join(' · ')
-      const isTask = x.kind === 'task'
-      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, span, detail, isTask, row: r }]
+      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, span, detail, row: r }]
     })
     type Entry = (typeof entries)[number]
     const groups = (['running', 'completed', 'canceled'] as const)
@@ -1057,22 +1068,20 @@ export const register: Register = on => {
                 height={CRAB_PIXELS.length * ICON_PX}
               />
             ) : null}
-            {x.row.icon && !x.isTask ? <Text color={x.kindColor} bold>{x.row.left}</Text> : null}
-            {x.row.icon && !x.isTask ? <Text color={MUTED}>-</Text> : null}
+            <Text color={x.kindColor} bold>{x.row.left}</Text>
+            <Text color={MUTED}>-</Text>
             <Box flexShrink={1} minWidth={0}>
               <Text color={MUTED} bold wrap="truncate">{x.row.name}</Text>
             </Box>
-            {x.row.mark ? <Text color={MUTED}>-</Text> : null}
-            {x.row.mark ? (
-              <Text color={MARK_COLORS[x.row.mark]} bold>{`${MARK_TEXT[x.row.mark]} ${MARK_LABELS[x.row.mark]}`}</Text>
-            ) : null}
           </Box>
           <Svg
             source={barSvg(x.row.ratio, x.row.light, x.row.strong, THIN_BAR_PX, THIN_BAR_PX / 2)}
             alt={`${x.row.name}: ${Math.round(x.row.ratio * 100)}%`}
             height={THIN_BAR_PX}
           />
-          <Box flexDirection="row" justifyContent="flex-end">
+          <Box flexDirection="row" justifyContent="flex-end" gap={1}>
+            <Text color={statusColor(x.row.mark)} bold>{statusText(x.row.mark)}</Text>
+            <Text color={MUTED}>-</Text>
             <Text color={MUTED}>{x.span}</Text>
           </Box>
         </Box>
@@ -1105,13 +1114,9 @@ export const register: Register = on => {
           </Box>
           <Text wrap="truncate-end">
             {` ${icon}`}
-            {x.isTask ? null : <Text color={x.kindColor} bold>{x.row.left}</Text>}
-            {x.isTask ? null : <Text color={MUTED}>{' - '}</Text>}
+            <Text color={x.kindColor} bold>{x.row.left}</Text>
+            <Text color={MUTED}>{' - '}</Text>
             <Text color={MUTED} bold>{x.row.name}</Text>
-            {x.row.mark ? <Text color={MUTED}>{' - '}</Text> : null}
-            {x.row.mark ? (
-              <Text color={MARK_COLORS[x.row.mark]} bold>{`${MARK_TEXT[x.row.mark]} ${MARK_LABELS[x.row.mark]}`}</Text>
-            ) : null}
           </Text>
           <Text>
             {' '}
@@ -1120,7 +1125,8 @@ export const register: Register = on => {
             ))}
           </Text>
           <Box flexDirection="row" justifyContent="flex-end">
-            <Text color={MUTED}>{`${x.span} `}</Text>
+            <Text color={statusColor(x.row.mark)} bold>{statusText(x.row.mark)}</Text>
+            <Text color={MUTED}>{` - ${x.span} `}</Text>
           </Box>
         </Box>
       )
