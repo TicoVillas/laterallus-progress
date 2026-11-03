@@ -1129,8 +1129,8 @@ export const register: Register = on => {
     )
   })
   // Linha do tempo, no estilo de um painel de agentes: cada plano, subagente e agente
-  // externo numa entrada própria, agrupadas em Running, Completed e Canceled e, dentro de
-  // cada grupo, na ordem em que começaram. Em cima o tipo, a contagem, a duração e o horário
+  // externo numa entrada própria, agrupadas em Running, Completed e Canceled: Running na ordem
+  // em que começaram, os encerrados do fim mais recente para o mais antigo. Em cima o tipo, a contagem, a duração e o horário
   // de início / fim; depois quem roda, na cor do tipo, e o que a atividade faz, em cinza;
   // depois uma barra fina e, embaixo, à direita, o modelo, os tokens e o estado.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
@@ -1147,11 +1147,16 @@ export const register: Register = on => {
       const usage = [r.model ? modelText(r.model) : null, r.tokens !== null ? tokensText(r.tokens) : null].filter(
         (v): v is string => v !== null,
       )
-      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, detail, usage, row: r }]
+      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, detail, usage, endedAt: shown.endedAt, row: r }]
     })
     type Entry = (typeof entries)[number]
     const groups = (['running', 'completed', 'canceled'] as const)
-      .map(status => ({ status, items: entries.filter(x => x.status === status) }))
+      .map(status => {
+        const items = entries.filter(x => x.status === status)
+        // Os encerrados vêm do mais recente para o mais antigo, pelo horário de fim.
+        if (status !== 'running') items.sort((x, y) => (y.endedAt ?? 0) - (x.endedAt ?? 0))
+        return { status, items }
+      })
       .filter(g => g.items.length > 0)
 
     if (e.surface === 'desktop') {

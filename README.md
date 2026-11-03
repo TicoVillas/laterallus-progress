@@ -10,7 +10,7 @@ A band mostra tudo o que está rodando, sem limite. De cada tipo (task, subagent
 
 ## Timeline
 
-Uma aba lateral, **Timeline**, abre sozinha e guarda o histórico da sessão: cada plano (**Task**), subagente (**Sub-Agent**) e review do Codex (**External Agent**) ganha uma entrada própria e nada sai dela. As entradas ficam agrupadas em **Running**, **Completed** e **Canceled**, cada grupo em ordem de início; um plano que fica pela metade quando outro começa vai para Canceled. Cada entrada mostra:
+Uma aba lateral, **Timeline**, abre sozinha e guarda o histórico da sessão: cada plano (**Task**), subagente (**Sub-Agent**) e review do Codex (**External Agent**) ganha uma entrada própria e nada sai dela. As entradas ficam agrupadas em **Running**, **Completed** e **Canceled**, Running em ordem de início e os encerrados do fim mais recente para o mais antigo; um plano que fica pela metade quando outro começa vai para Canceled. Cada entrada mostra:
 
 - o tipo e, à direita, a contagem (etapas, ferramentas ou ações do Codex), os tempos e o horário de início / fim;
 - o ícone, o nome de quem roda na cor do tipo (**Claude** em laranja numa task, o nome do agente num agente), `-` e o nome da atividade em cinza negrito;
