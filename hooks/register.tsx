@@ -61,15 +61,30 @@ const CODEX_PIXELS = [
   '.LSL...BBBBB....',
   'LLLLL...B.B.....',
 ]
+// O crab das tasks: sempre laranja, com um bloco de notas no lugar do notebook.
+// N folha, n linhas escritas, R espiral.
+const TASK_PIXELS = [
+  '......CCCCCCCC..',
+  '......CECCCCEC..',
+  '.....CCCCCCCCCCC',
+  '.RRR..CCCCCCCC..',
+  'NNNNN.CCCCCCCC..',
+  'NnnnN.C.C..C.C..',
+  'NNNNN...........',
+  'NnnnN...........',
+]
 const ICON_PX = 2
 const CODEX_BODY = '#5B7CFA'
 // A barra do Codex fica sempre no azul-índigo do pet.
 const CODEX_COLORS = ['#C3CCFB', '#5468E8'] as const
 
-type Icon = { kind: 'crab' | 'codex'; color: string }
+type Icon = { kind: 'crab' | 'codex' | 'task'; color: string }
+
+const TASK_ICON: Icon = { kind: 'task', color: '#D77757' }
+const CRAB_ICON: Icon = { kind: 'crab', color: '#8B6FE0' }
 
 function iconSvg(icon: Icon): string {
-  const grid = icon.kind === 'crab' ? CRAB_PIXELS : CODEX_PIXELS
+  const grid = icon.kind === 'crab' ? CRAB_PIXELS : icon.kind === 'task' ? TASK_PIXELS : CODEX_PIXELS
   const fills: Record<string, string> = {
     C: icon.color,
     E: '#262624',
@@ -79,6 +94,9 @@ function iconSvg(icon: Icon): string {
     P: '#D8E0FF',
     L: '#B8B6AE',
     S: '#5A5955',
+    N: '#F2EEE6',
+    n: '#9C9A92',
+    R: '#B8B6AE',
   }
   const rects = grid
     .flatMap((row, y) =>
@@ -88,6 +106,14 @@ function iconSvg(icon: Icon): string {
   const w = grid[0]!.length
   const h = grid.length
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w * ICON_PX}" height="${h * ICON_PX}" viewBox="0 0 ${w} ${h}" shape-rendering="crispEdges">${rects}</svg>`
+}
+
+function iconAlt(icon: Icon): string {
+  return icon.kind === 'crab' ? 'crab' : icon.kind === 'task' ? 'task' : 'Codex'
+}
+
+function iconEmoji(icon: Icon): string {
+  return icon.kind === 'crab' ? '🦀' : icon.kind === 'task' ? '📝' : '🤖'
 }
 
 // Altura e raio dos cantos da barra no desktop (px), próximos ao formato da band.
@@ -150,11 +176,22 @@ async function syncTimeline($: EngineInterface): Promise<void> {
   }
   if (fresh.length === 0) return
   let isNewEntry = false
+  const t = await $.clock.now()
   await update($, timeline, prev => {
     const byKey = new Map(prev.map(x => [x.key, x] as const))
     for (const x of fresh) {
-      if (!byKey.has(x.key)) isNewEntry = true
-      byKey.set(x.key, x)
+      if (!byKey.has(x.key)) {
+        isNewEntry = true
+        // Um plano novo encerra o anterior que ficou pela metade: ele vai para Canceled.
+        if (x.kind === 'task') {
+          for (const [key, old] of byKey) {
+            if (old.kind === 'task' && old.activity && old.activity.endedAt === null && !old.cancelledAt) {
+              byKey.set(key, { ...old, cancelledAt: t })
+            }
+          }
+        }
+      }
+      byKey.set(x.key, { ...x, cancelledAt: byKey.get(x.key)?.cancelledAt ?? null })
     }
     return [...byKey.values()].sort((x, y) => x.startedAt - y.startedAt).slice(-300)
   })
@@ -437,7 +474,7 @@ function desktopBar(ui: Elements['desktop'], r: Row, leftCells: number, rightCel
         {r.icon ? (
           <Svg
             source={iconSvg(r.icon)}
-            alt={r.icon.kind === 'crab' ? 'crab' : 'Codex'}
+            alt={iconAlt(r.icon)}
             width={CRAB_PIXELS[0]!.length * ICON_PX}
             height={CRAB_PIXELS.length * ICON_PX}
           />
@@ -473,7 +510,7 @@ function terminalBar(ui: Pick<Elements['terminal'], 'Box' | 'Text'>, r: Row, wid
   const filled = Math.round(r.ratio * width)
   return (
     <Box key={r.key} flexDirection="row">
-      <Text color={MUTED} bold>{` ${(r.icon ? `${r.icon.kind === 'crab' ? '🦀' : '🤖'} ${r.left}` : r.left).slice(0, leftCells).padEnd(leftCells)} `}</Text>
+      <Text color={MUTED} bold>{` ${(r.icon ? `${iconEmoji(r.icon)} ${r.left}` : r.left).slice(0, leftCells).padEnd(leftCells)} `}</Text>
       {[...cells.slice(0, filled)].map((ch, i) => (
         <Text key={`f${i}`} color={ON_FILL} backgroundColor={mix(r.light, r.strong, width > 1 ? i / (width - 1) : 1)} bold>
           {ch}
@@ -499,9 +536,40 @@ const KIND_LABELS: Record<TimelineEntry['kind'], string> = {
 
 // A barra de uma linha da linha do tempo, e quando ela começou e terminou.
 function timelineRow(x: TimelineEntry, t: number): { row: Row; endedAt: number | null } | null {
-  if (x.activity) return { row: { ...mainRow(x.activity, t), key: x.key, left: 'Progress' }, endedAt: x.activity.endedAt }
+  if (x.activity && x.cancelledAt) {
+    // Os tempos param no cancelamento, e a marca é ✗.
+    const row = mainRow(x.activity, x.cancelledAt)
+    return { row: { ...row, key: x.key, left: 'Progress', icon: TASK_ICON, name: `✗ ${row.name}` }, endedAt: x.cancelledAt }
+  }
+  if (x.activity) return { row: { ...mainRow(x.activity, t), key: x.key, left: 'Progress', icon: TASK_ICON }, endedAt: x.activity.endedAt }
   if (x.agent) return { row: { ...agentRow(x.agent, t), key: x.key }, endedAt: x.agent.endedAt }
   return null
+}
+
+type EntryStatus = 'running' | 'completed' | 'canceled'
+
+function entryStatus(x: TimelineEntry): EntryStatus {
+  if (x.activity) return x.cancelledAt ? 'canceled' : x.activity.endedAt !== null ? 'completed' : 'running'
+  if (x.agent) return x.agent.endedAt === null ? 'running' : x.agent.failed ? 'canceled' : 'completed'
+  return 'completed'
+}
+
+const STATUS_LABELS: Record<EntryStatus, string> = { running: 'Running', completed: 'Completed', canceled: 'Canceled' }
+
+// Os totais da sessão por tipo: rodando / encerrados (concluídos ou cancelados) / total.
+type Totals = { kind: TimelineEntry['kind']; icon: Icon; text: string }
+
+function totalsOf(list: TimelineEntry[]): Totals[] {
+  const kinds: [TimelineEntry['kind'], Icon][] = [
+    ['task', TASK_ICON],
+    ['agent', CRAB_ICON],
+    ['external', { kind: 'codex', color: CODEX_BODY }],
+  ]
+  return kinds.map(([kind, icon]) => {
+    const mine = list.filter(x => x.kind === kind)
+    const running = mine.filter(x => entryStatus(x) === 'running').length
+    return { kind, icon, text: `${running} / ${mine.length - running} / ${mine.length}` }
+  })
 }
 
 // O plugin do Codex roda as reviews por `node .../codex-companion.mjs review` (ou
@@ -819,34 +887,20 @@ export const register: Register = on => {
     return res
   })
 
+  // A band mostra só o que está rodando; o que terminou ou foi cancelado vive na Timeline.
+  // Embaixo, uma linha com os totais da sessão por tipo.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const a = await read($, activity)
     const list = await read($, agents)
-    if ((!a || a.steps.length === 0) && list.length === 0) {
-      return next(e)
-    }
-
+    const history = await read($, timeline)
     const t = await read($, now)
     const rows: Row[] = []
-    if (a && a.steps.length > 0) {
-      rows.push(
-        (await read($, waiting))
-          ? {
-              key: 'main',
-              left: 'Task Progress',
-              icon: null,
-              ratio: 0,
-              label: 'Aguardando o próximo plano…',
-              name: 'Aguardando o próximo plano…',
-              count: '',
-              right: `${clock(0)} / ${clock(0)}`,
-              light: ORANGE_LIGHT,
-              strong: ORANGE,
-            }
-          : mainRow(a, t),
-      )
+    if (a && a.steps.length > 0 && a.endedAt === null && !(await read($, waiting))) rows.push(mainRow(a, t))
+    for (const g of list) if (g.endedAt === null) rows.push(agentRow(g, t))
+    if (rows.length === 0 && history.length === 0) {
+      return next(e)
     }
-    for (const g of list) rows.push(agentRow(g, t))
+    const totals = totalsOf(history)
 
     // Com uma pergunta na band, o engine aceita só um tree sem larguras, alturas ou posições,
     // com a pergunta dele embaixo: as barras viram uma linha de texto cada, sem sumir.
@@ -858,7 +912,7 @@ export const register: Register = on => {
         const filled = Math.round(r.ratio * cells)
         return (
           <Box key={r.key} flexDirection="row" gap={1}>
-            <Text color={MUTED} bold>{r.icon ? `${r.icon.kind === 'crab' ? '🦀' : '🤖'} ${r.left}` : r.left}</Text>
+            <Text color={MUTED} bold>{r.icon ? `${iconEmoji(r.icon)} ${r.left}` : r.left}</Text>
             <Text>
               {Array.from({ length: cells }, (_, i) => (
                 <Text key={`c${i}`} color={i < filled ? mix(r.light, r.strong, i / (cells - 1)) : TRACK}>━</Text>
@@ -872,6 +926,11 @@ export const register: Register = on => {
       return (
         <Box flexDirection="column">
           {rows.map(line)}
+          <Box key="totals" flexDirection="row" gap={3}>
+            {totals.map(x => (
+              <Text key={x.kind} color={MUTED}>{`${iconEmoji(x.icon)} ${x.text}`}</Text>
+            ))}
+          </Box>
           {below}
         </Box>
       )
@@ -879,10 +938,24 @@ export const register: Register = on => {
 
     if (e.surface === 'desktop') {
       const ui = $.ui.resolve(e)
-      const { Box } = ui
+      const { Box, Text, Svg } = ui
+      const align = ['flex-start', 'center', 'flex-end'] as const
       return (
         <Box flexDirection="column" gap="sm" paddingX={1} paddingY="sm">
           {rows.map(r => desktopBar(ui, r, LEFT_CELLS, RIGHT_CELLS))}
+          <Box key="totals" flexDirection="row" alignItems="center">
+            {totals.map((x, i) => (
+              <Box key={x.kind} width="33%" flexDirection="row" alignItems="center" justifyContent={align[i]} gap={1}>
+                <Svg
+                  source={iconSvg(x.icon)}
+                  alt={KIND_LABELS[x.kind]}
+                  width={CRAB_PIXELS[0]!.length * ICON_PX}
+                  height={CRAB_PIXELS.length * ICON_PX}
+                />
+                <Text color={MUTED} bold>{x.text}</Text>
+              </Box>
+            ))}
+          </Box>
         </Box>
       )
     }
@@ -891,11 +964,21 @@ export const register: Register = on => {
     const ui = $.ui.resolve(e)
     const rightCells = Math.max(RIGHT_CELLS, ...rows.map(r => r.right.length + 2))
     const width = Math.max(10, e.props.bodyColumns - (LEFT_CELLS + 2) - rightCells)
-    return <ui.Box flexDirection="column">{rows.map(r => terminalBar(ui, r, width, LEFT_CELLS, rightCells))}</ui.Box>
+    return (
+      <ui.Box flexDirection="column">
+        {rows.map(r => terminalBar(ui, r, width, LEFT_CELLS, rightCells))}
+        <ui.Box key="totals" flexDirection="row" justifyContent="space-between" paddingX={1}>
+          {totals.map(x => (
+            <ui.Text key={x.kind} color={MUTED} bold>{`${iconEmoji(x.icon)} ${x.text}`}</ui.Text>
+          ))}
+        </ui.Box>
+      </ui.Box>
+    )
   })
   // Linha do tempo, no estilo de um painel de agentes: cada plano, subagente e agente
-  // externo numa entrada própria, na ordem em que começou. Em cima o tipo e a contagem; no
-  // meio o que a atividade faz, na cor do tipo; embaixo uma barra fina e o horário de início / fim.
+  // externo numa entrada própria, agrupadas em Running, Completed e Canceled e, dentro de
+  // cada grupo, na ordem em que começaram. Em cima o tipo e a contagem; no meio o que a
+  // atividade faz, na cor do tipo; embaixo uma barra fina e o horário de início / fim.
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const list = await read($, timeline)
     const t = await read($, now)
@@ -906,78 +989,95 @@ export const register: Register = on => {
       const kindColor = x.kind === 'task' ? ORANGE : r.strong
       const span = `${timeOfDay(x.startedAt)} / ${shown.endedAt !== null ? timeOfDay(shown.endedAt) : '--:--:--'}`
       const detail = [r.count, r.right].filter(Boolean).join(' · ')
-      return [{ key: x.key, kind: KIND_LABELS[x.kind], kindColor, span, detail, row: r }]
+      const isTask = x.kind === 'task'
+      return [{ key: x.key, status: entryStatus(x), kind: KIND_LABELS[x.kind], kindColor, span, detail, isTask, row: r }]
     })
+    type Entry = (typeof entries)[number]
+    const groups = (['running', 'completed', 'canceled'] as const)
+      .map(status => ({ status, items: entries.filter(x => x.status === status) }))
+      .filter(g => g.items.length > 0)
 
     if (e.surface === 'desktop') {
       const { Box, Text, Svg } = $.ui.resolve(e)
-      return (
-        <Box flexDirection="column" gap="md" paddingX={1} paddingY="sm">
-          {entries.length === 0 ? <Text color={MUTED}>Nenhuma atividade ainda.</Text> : null}
-          {entries.map((x, i) => (
-            <Box key={x.key} flexDirection="column" gap="xs">
-              {i > 0 ? <Svg source={DIVIDER_SVG} alt="" height={1} /> : null}
-              <Box flexDirection="row" justifyContent="space-between" gap={1}>
-                <Text color={MUTED} bold>{x.kind}</Text>
-                <Text color={MUTED} wrap="truncate">{x.detail}</Text>
-              </Box>
-              <Box flexDirection="row" alignItems="center" gap={1}>
-                {x.row.icon ? (
-                  <Svg
-                    source={iconSvg(x.row.icon)}
-                    alt={x.row.icon.kind === 'crab' ? 'crab' : 'Codex'}
-                    width={CRAB_PIXELS[0]!.length * ICON_PX}
-                    height={CRAB_PIXELS.length * ICON_PX}
-                  />
-                ) : null}
-                {x.row.icon ? <Text color={x.kindColor} bold>{x.row.left}</Text> : null}
-                <Box flexGrow={1} flexShrink={1} minWidth={0}>
-                  <Text color={x.kindColor} bold={!x.row.icon} wrap="truncate">{x.row.name}</Text>
-                </Box>
-              </Box>
+      const entry = (x: Entry, i: number) => (
+        <Box key={x.key} flexDirection="column" gap="xs">
+          {i > 0 ? <Svg source={DIVIDER_SVG} alt="" height={1} /> : null}
+          <Box flexDirection="row" justifyContent="space-between" gap={1}>
+            <Text color={MUTED} bold>{x.kind}</Text>
+            <Text color={MUTED} wrap="truncate">{x.detail}</Text>
+          </Box>
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            {x.row.icon ? (
               <Svg
-                source={barSvg(x.row.ratio, x.row.light, x.row.strong, THIN_BAR_PX, THIN_BAR_PX / 2)}
-                alt={`${x.row.name}: ${Math.round(x.row.ratio * 100)}%`}
-                height={THIN_BAR_PX}
+                source={iconSvg(x.row.icon)}
+                alt={iconAlt(x.row.icon)}
+                width={CRAB_PIXELS[0]!.length * ICON_PX}
+                height={CRAB_PIXELS.length * ICON_PX}
               />
-              <Box flexDirection="row" justifyContent="flex-end">
-                <Text color={MUTED}>{x.span}</Text>
-              </Box>
+            ) : null}
+            {x.row.icon && !x.isTask ? <Text color={x.kindColor} bold>{x.row.left}</Text> : null}
+            <Box flexGrow={1} flexShrink={1} minWidth={0}>
+              <Text color={x.kindColor} bold={x.isTask} wrap="truncate">{x.row.name}</Text>
+            </Box>
+          </Box>
+          <Svg
+            source={barSvg(x.row.ratio, x.row.light, x.row.strong, THIN_BAR_PX, THIN_BAR_PX / 2)}
+            alt={`${x.row.name}: ${Math.round(x.row.ratio * 100)}%`}
+            height={THIN_BAR_PX}
+          />
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Text color={MUTED}>{x.span}</Text>
+          </Box>
+        </Box>
+      )
+      return (
+        <Box flexDirection="column" gap="lg" paddingX={1} paddingY="sm">
+          {entries.length === 0 ? <Text color={MUTED}>Nenhuma atividade ainda.</Text> : null}
+          {groups.map(g => (
+            <Box key={g.status} flexDirection="column" gap="md">
+              <Text color={ON_TRACK} bold>{`${STATUS_LABELS[g.status]} · ${g.items.length}`}</Text>
+              {g.items.map(entry)}
             </Box>
           ))}
         </Box>
       )
     }
 
-    // Terminal: as mesmas três linhas em texto, a barra como uma fileira de ━.
+    // Terminal: as mesmas linhas em texto, a barra como uma fileira de ━.
     const { Box, Text } = $.ui.resolve(e)
     const cells = Math.max(10, e.props.bodyColumns - 2)
+    const entry = (x: Entry, i: number) => {
+      const filled = Math.round(x.row.ratio * cells)
+      const who = x.row.icon ? `${iconEmoji(x.row.icon)} ${x.isTask ? '' : `${x.row.left} · `}` : ''
+      return (
+        <Box key={x.key} flexDirection="column" marginBottom={1}>
+          {i > 0 ? <Text color={DIVIDER}>{'─'.repeat(cells + 1)}</Text> : null}
+          <Box flexDirection="row" justifyContent="space-between">
+            <Text color={MUTED} bold>{` ${x.kind}`}</Text>
+            <Text color={MUTED} wrap="truncate-end">{`${x.detail} `}</Text>
+          </Box>
+          <Text color={x.kindColor} bold wrap="truncate-end">{` ${who}${x.row.name}`}</Text>
+          <Text>
+            {' '}
+            {Array.from({ length: cells }, (_, c) => (
+              <Text key={`c${c}`} color={c < filled ? mix(x.row.light, x.row.strong, c / (cells - 1)) : TRACK}>━</Text>
+            ))}
+          </Text>
+          <Box flexDirection="row" justifyContent="flex-end">
+            <Text color={MUTED}>{`${x.span} `}</Text>
+          </Box>
+        </Box>
+      )
+    }
     return (
       <Box flexDirection="column">
         {entries.length === 0 ? <Text color={MUTED}>Nenhuma atividade ainda.</Text> : null}
-        {entries.map((x, i) => {
-          const filled = Math.round(x.row.ratio * cells)
-          const who = x.row.icon ? `${x.row.icon.kind === 'crab' ? '🦀' : '🤖'} ${x.row.left} · ` : ''
-          return (
-            <Box key={x.key} flexDirection="column" marginBottom={1}>
-              {i > 0 ? <Text color={DIVIDER}>{'─'.repeat(cells + 1)}</Text> : null}
-              <Box flexDirection="row" justifyContent="space-between">
-                <Text color={MUTED} bold>{` ${x.kind}`}</Text>
-                <Text color={MUTED} wrap="truncate-end">{`${x.detail} `}</Text>
-              </Box>
-              <Text color={x.kindColor} bold wrap="truncate-end">{` ${who}${x.row.name}`}</Text>
-              <Text>
-                {' '}
-                {Array.from({ length: cells }, (_, i) => (
-                  <Text key={`c${i}`} color={i < filled ? mix(x.row.light, x.row.strong, i / (cells - 1)) : TRACK}>━</Text>
-                ))}
-              </Text>
-              <Box flexDirection="row" justifyContent="flex-end">
-                <Text color={MUTED}>{`${x.span} `}</Text>
-              </Box>
-            </Box>
-          )
-        })}
+        {groups.map(g => (
+          <Box key={g.status} flexDirection="column">
+            <Text color={ON_TRACK} bold>{` ${STATUS_LABELS[g.status]} · ${g.items.length}`}</Text>
+            {g.items.map(entry)}
+          </Box>
+        ))}
       </Box>
     )
   })

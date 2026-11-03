@@ -45,6 +45,8 @@ export type TimelineEntry = {
   startedAt: number
   activity: Activity | null
   agent: AgentBar | null
+  // Um plano que ficou sem terminar quando outro começou: cancelado nesse instante.
+  cancelledAt?: number | null
 }
 
 declare module 'claude-code' {

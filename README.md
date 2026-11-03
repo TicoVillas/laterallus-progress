@@ -6,11 +6,11 @@ Um mod para o Claude Code que mostra, logo acima da caixa de chat, barras de pro
 - **Subagentes nativos**: uma barra por subagente, com um crab segurando um notebook, um nome de uma figura histórica e uma cor própria. Mostra a tarefa do subagente e o andamento dele.
 - **Reviews do Codex**: uma barra azul com o pet do Codex para cada `/codex:review`, `/codex:adversarial-review` ou rescue do plugin do Codex, com a fase, as ações do Codex e, no fim, os achados.
 
-As barras começam vazias, não somem ao terminar e ficam até começar uma nova atividade. Enquanto há uma pergunta aberta acima do prompt, a band vira uma versão compacta em texto.
+As barras começam vazias e mostram só o que está rodando: o que termina ou é cancelado sai da band e fica na Timeline. Embaixo das barras, uma linha de totais mostra, para tasks (o crab laranja com bloco de notas), subagentes e agentes externos, quantos estão `rodando / encerrados / total`. Enquanto há uma pergunta aberta acima do prompt, a band vira uma versão compacta em texto.
 
 ## Timeline
 
-Uma aba lateral, **Timeline**, abre sozinha e guarda o histórico da sessão: cada plano (**Task**), subagente (**Sub-Agent**) e review do Codex (**External Agent**) ganha uma entrada própria, em ordem de início, e nada sai dela. Cada entrada mostra:
+Uma aba lateral, **Timeline**, abre sozinha e guarda o histórico da sessão: cada plano (**Task**), subagente (**Sub-Agent**) e review do Codex (**External Agent**) ganha uma entrada própria e nada sai dela. As entradas ficam agrupadas em **Running**, **Completed** e **Canceled**, cada grupo em ordem de início; um plano que fica pela metade quando outro começa vai para Canceled. Cada entrada mostra:
 
 - o tipo e a contagem (etapas, ferramentas ou ações do Codex) com os tempos;
 - o nome da atividade na cor do tipo, com o ícone e o nome do agente quando é um agente;
