@@ -320,12 +320,28 @@ type Row = {
   icon: Icon | null
   ratio: number
   label: string
-  // O nome da atividade (com ✓/✗) e a contagem entre parênteses, separados para a Timeline.
+  // O nome da atividade, a marca de fim (✓/✗) e a contagem entre parênteses, separados
+  // para a Timeline; o label junta tudo para a barra.
   name: string
+  mark: Mark
   count: string
   right: string
   light: string
   strong: string
+}
+
+type Mark = 'ok' | 'fail' | 'cancel' | null
+
+const MARK_TEXT = { ok: '✓', fail: '✗', cancel: '✗' } as const
+const MARK_LABELS = { ok: 'Success', fail: 'Failed', cancel: 'Canceled' } as const
+const MARK_COLORS = { ok: '#6CC070', fail: '#E5534B', cancel: '#E5534B' } as const
+
+function agentMark(g: AgentBar): Mark {
+  return g.endedAt === null ? null : !g.failed ? 'ok' : g.canceled ? 'cancel' : 'fail'
+}
+
+function markPrefix(m: Mark): string {
+  return m ? `${MARK_TEXT[m]} ` : ''
 }
 
 function mainRow(a: Activity, t0: number): Row {
@@ -351,15 +367,17 @@ function mainRow(a: Activity, t0: number): Row {
     eta = ` ~${clock(currentLeft + pending * avg)} restantes`
   }
 
-  const name = `${a.endedAt !== null ? '✓ ' : ''}${current?.name ?? ''}`
+  const name = current?.name ?? ''
+  const mark: Mark = a.endedAt !== null ? 'ok' : null
   const count = `${position}/${total}${eta}`
   return {
     key: 'main',
     left: 'Task Progress',
     icon: null,
     ratio: completed / total,
-    label: `${name} (${count})`,
+    label: `${markPrefix(mark)}${name} (${count})`,
     name,
+    mark,
     count,
     right: `${clock(stepMs)} / ${clock(totalMs)}`,
     light: ORANGE_LIGHT,
@@ -385,6 +403,7 @@ function codexRow(g: AgentBar, job: CodexJob, t0: number): Row {
   const byPhase: Record<string, number> = { queued: 0.03, starting: 0.08, reviewing: 0.2, finalizing: 0.92 }
   const ratio = g.endedAt !== null ? (g.failed ? working : 1) : (byPhase[job.phase] ?? working)
   const what = `Codex ${job.kindLabel}`
+  const mark = agentMark(g)
   let detail: string
   if (g.endedAt !== null) {
     detail = g.failed ? 'interrompida' : job.findings === null ? 'concluída' : findingsText(job.findings)
@@ -397,8 +416,9 @@ function codexRow(g: AgentBar, job: CodexJob, t0: number): Row {
     left: g.philosopher,
     icon: { kind: 'codex', color: CODEX_BODY },
     ratio,
-    label: `${g.endedAt === null ? '' : g.failed ? '✗ ' : '✓ '}${what} (${detail})`,
-    name: `${g.endedAt === null ? '' : g.failed ? '✗ ' : '✓ '}${what}`,
+    label: `${markPrefix(mark)}${what} (${detail})`,
+    name: what,
+    mark,
     count: detail,
     right: clock(t - g.startedAt),
     light,
@@ -416,7 +436,7 @@ function agentRow(g: AgentBar, t0: number): Row {
   const [light, strong] = AGENT_COLORS[g.color % AGENT_COLORS.length]!
   const t = g.endedAt ?? Math.max(t0, g.startedAt)
   const totalMs = t - g.startedAt
-  const mark = g.endedAt === null ? '' : g.failed ? '✗ ' : '✓ '
+  const mark = agentMark(g)
   const plan = g.plan && g.plan.steps.length > 0 ? g.plan : null
 
   if (plan) {
@@ -430,8 +450,9 @@ function agentRow(g: AgentBar, t0: number): Row {
       left: g.philosopher,
       icon: { kind: 'crab', color: strong },
       ratio: g.endedAt !== null && !g.failed ? 1 : completed / total,
-      label: `${mark}${g.description} (${curIdx >= 0 ? curIdx + 1 : completed}/${total})`,
-      name: `${mark}${g.description}`,
+      label: `${markPrefix(mark)}${g.description} (${curIdx >= 0 ? curIdx + 1 : completed}/${total})`,
+      name: g.description,
+      mark,
       count: `${curIdx >= 0 ? curIdx + 1 : completed}/${total}`,
       right: `${clock(stepMs)} / ${clock(totalMs)}`,
       light,
@@ -447,8 +468,9 @@ function agentRow(g: AgentBar, t0: number): Row {
     left: g.philosopher,
     icon: { kind: 'crab', color: strong },
     ratio: g.endedAt !== null && !g.failed ? 1 : busy,
-    label: `${mark}${g.description} (${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'})`,
-    name: `${mark}${g.description}`,
+    label: `${markPrefix(mark)}${g.description} (${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'})`,
+    name: g.description,
+    mark,
     count: `${g.tools} ${g.tools === 1 ? 'ferramenta' : 'ferramentas'}`,
     right: clock(totalMs),
     light,
@@ -539,7 +561,8 @@ function timelineRow(x: TimelineEntry, t: number): { row: Row; endedAt: number |
   if (x.activity && x.cancelledAt) {
     // Os tempos param no cancelamento, e a marca é ✗.
     const row = mainRow(x.activity, x.cancelledAt)
-    return { row: { ...row, key: x.key, left: 'Progress', icon: TASK_ICON, name: `✗ ${row.name}` }, endedAt: x.cancelledAt }
+    const label = `${markPrefix('cancel')}${row.name} (${row.count})`
+    return { row: { ...row, key: x.key, left: 'Progress', icon: TASK_ICON, mark: 'cancel', label }, endedAt: x.cancelledAt }
   }
   if (x.activity) return { row: { ...mainRow(x.activity, t), key: x.key, left: 'Progress', icon: TASK_ICON }, endedAt: x.activity.endedAt }
   if (x.agent) return { row: { ...agentRow(x.agent, t), key: x.key }, endedAt: x.agent.endedAt }
@@ -678,6 +701,7 @@ async function pollCodex($: EngineInterface): Promise<void> {
                 ...x,
                 endedAt: x.endedAt ?? endedAt,
                 failed: isOver && rec!.status !== 'completed',
+                canceled: isOver && rec!.status === 'cancelled',
                 codex: { ...job, jobId: recId, phase, actions, findings },
               }
             : x,
@@ -780,8 +804,9 @@ export const register: Register = on => {
       await update($, now, () => t)
       if (e.agentId) {
         const failed = e.reason === 'error' || e.reason === 'refusal' || e.isAborted
+        const canceled = e.isAborted
         await update($, agents, prev =>
-          prev.map(g => (g.id === e.agentId && g.endedAt === null ? { ...g, endedAt: t, failed } : g)),
+          prev.map(g => (g.id === e.agentId && g.endedAt === null ? { ...g, endedAt: t, failed, canceled } : g)),
         )
       } else {
         mainWorking = false
@@ -844,7 +869,10 @@ export const register: Register = on => {
         if (res.deny !== undefined || res.isError) {
           const t = await $.clock.now()
           const id = codexBarId
-          await update($, agents, list => list.map(g => (g.id === id && g.endedAt === null ? { ...g, endedAt: t, failed: true } : g)))
+          const canceled = res.deny !== undefined
+          await update($, agents, list =>
+            list.map(g => (g.id === id && g.endedAt === null ? { ...g, endedAt: t, failed: true, canceled } : g)),
+          )
         }
       } catch {
         // ignora: o progresso é só visual
@@ -887,16 +915,30 @@ export const register: Register = on => {
     return res
   })
 
-  // A band mostra só o que está rodando; o que terminou ou foi cancelado vive na Timeline.
-  // Embaixo, uma linha com os totais da sessão por tipo.
+  // A band mostra tudo o que está rodando e, de cada tipo sem nada rodando, o último que
+  // terminou ou foi cancelado; o resto vive na Timeline. Embaixo, os totais por tipo.
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
     const a = await read($, activity)
     const list = await read($, agents)
     const history = await read($, timeline)
     const t = await read($, now)
+    const running: Record<TimelineEntry['kind'], Row[]> = { task: [], agent: [], external: [] }
+    if (a && a.steps.length > 0 && a.endedAt === null && !(await read($, waiting))) running.task.push(mainRow(a, t))
+    for (const g of list) if (g.endedAt === null) running[g.codex ? 'external' : 'agent'].push(agentRow(g, t))
     const rows: Row[] = []
-    if (a && a.steps.length > 0 && a.endedAt === null && !(await read($, waiting))) rows.push(mainRow(a, t))
-    for (const g of list) if (g.endedAt === null) rows.push(agentRow(g, t))
+    for (const kind of ['task', 'agent', 'external'] as const) {
+      if (running[kind].length > 0) {
+        rows.push(...running[kind])
+        continue
+      }
+      let last: { row: Row; endedAt: number } | null = null
+      for (const x of history) {
+        if (x.kind !== kind || entryStatus(x) === 'running') continue
+        const shown = timelineRow(x, t)
+        if (shown && shown.endedAt !== null && (!last || shown.endedAt >= last.endedAt)) last = { row: shown.row, endedAt: shown.endedAt }
+      }
+      if (last) rows.push(kind === 'task' ? { ...last.row, left: 'Task Progress', icon: null } : last.row)
+    }
     if (rows.length === 0 && history.length === 0) {
       return next(e)
     }
@@ -1016,9 +1058,14 @@ export const register: Register = on => {
               />
             ) : null}
             {x.row.icon && !x.isTask ? <Text color={x.kindColor} bold>{x.row.left}</Text> : null}
-            <Box flexGrow={1} flexShrink={1} minWidth={0}>
-              <Text color={x.kindColor} bold={x.isTask} wrap="truncate">{x.row.name}</Text>
+            {x.row.icon && !x.isTask ? <Text color={MUTED}>-</Text> : null}
+            <Box flexShrink={1} minWidth={0}>
+              <Text color={MUTED} bold wrap="truncate">{x.row.name}</Text>
             </Box>
+            {x.row.mark ? <Text color={MUTED}>-</Text> : null}
+            {x.row.mark ? (
+              <Text color={MARK_COLORS[x.row.mark]} bold>{`${MARK_TEXT[x.row.mark]} ${MARK_LABELS[x.row.mark]}`}</Text>
+            ) : null}
           </Box>
           <Svg
             source={barSvg(x.row.ratio, x.row.light, x.row.strong, THIN_BAR_PX, THIN_BAR_PX / 2)}
@@ -1048,7 +1095,7 @@ export const register: Register = on => {
     const cells = Math.max(10, e.props.bodyColumns - 2)
     const entry = (x: Entry, i: number) => {
       const filled = Math.round(x.row.ratio * cells)
-      const who = x.row.icon ? `${iconEmoji(x.row.icon)} ${x.isTask ? '' : `${x.row.left} · `}` : ''
+      const icon = x.row.icon ? `${iconEmoji(x.row.icon)} ` : ''
       return (
         <Box key={x.key} flexDirection="column" marginBottom={1}>
           {i > 0 ? <Text color={DIVIDER}>{'─'.repeat(cells + 1)}</Text> : null}
@@ -1056,7 +1103,16 @@ export const register: Register = on => {
             <Text color={MUTED} bold>{` ${x.kind}`}</Text>
             <Text color={MUTED} wrap="truncate-end">{`${x.detail} `}</Text>
           </Box>
-          <Text color={x.kindColor} bold wrap="truncate-end">{` ${who}${x.row.name}`}</Text>
+          <Text wrap="truncate-end">
+            {` ${icon}`}
+            {x.isTask ? null : <Text color={x.kindColor} bold>{x.row.left}</Text>}
+            {x.isTask ? null : <Text color={MUTED}>{' - '}</Text>}
+            <Text color={MUTED} bold>{x.row.name}</Text>
+            {x.row.mark ? <Text color={MUTED}>{' - '}</Text> : null}
+            {x.row.mark ? (
+              <Text color={MARK_COLORS[x.row.mark]} bold>{`${MARK_TEXT[x.row.mark]} ${MARK_LABELS[x.row.mark]}`}</Text>
+            ) : null}
+          </Text>
           <Text>
             {' '}
             {Array.from({ length: cells }, (_, c) => (

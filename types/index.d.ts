@@ -23,6 +23,8 @@ export type AgentBar = {
   startedAt: number
   endedAt: number | null
   failed: boolean
+  // Com failed: foi interrompido ou cancelado, não um erro.
+  canceled?: boolean
   tools: number
   plan: Activity | null
   // Só numa barra do Codex: o job que o plugin do Codex registrou para a review.
