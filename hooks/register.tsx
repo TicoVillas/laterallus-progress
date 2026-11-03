@@ -158,7 +158,7 @@ const agents = atom({ plugin: 'laterallus-progress', key: 'agents' } as const, [
 const agentsStepKey = atom({ plugin: 'laterallus-progress', key: 'agentsStepKey' } as const, null)
 // A linha do tempo do painel: nada sai dela, ao contrário da band.
 const timeline = atom({ plugin: 'laterallus-progress', key: 'timeline' } as const, [])
-const sessionTokens = atom({ plugin: 'laterallus-progress', key: 'sessionTokens' } as const, 0)
+const tokenTotals = atom({ plugin: 'laterallus-progress', key: 'tokenTotals' } as const, { main: 0, agents: 0 })
 
 const PANE = 'laterallus-timeline'
 const PANE_TITLE = 'Timeline'
@@ -882,7 +882,9 @@ export const register: Register = on => {
       if (r.usage) {
         const n = spent(r.usage)
         const model = r.usage.model
-        await update($, sessionTokens, total => total + n)
+        await update($, tokenTotals, total =>
+          e.agentId ? { ...total, agents: total.agents + n } : { ...total, main: total.main + n },
+        )
         if (e.agentId) {
           const agentId = e.agentId
           await update($, agents, prev =>
@@ -1044,9 +1046,14 @@ export const register: Register = on => {
       return next(e)
     }
     const totals = totalsOf(history)
-    // Ao lado do total de tasks, os tokens do Claude na sessão.
-    const tokens = await read($, sessionTokens)
-    const totalText = (x: Totals) => (x.kind === 'task' ? `${x.text} (${tokensText(tokens)})` : x.text)
+    // Ao lado do total de tasks, os tokens do Claude na sessão; ao lado dos subagentes, os deles.
+    const tokens = await read($, tokenTotals)
+    const totalText = (x: Totals) =>
+      x.kind === 'task'
+        ? `${x.text} (${tokensText(tokens.main)})`
+        : x.kind === 'agent'
+          ? `${x.text} (${tokensText(tokens.agents)})`
+          : x.text
 
     // Com uma pergunta na band, o engine aceita só um tree sem larguras, alturas ou posições,
     // com a pergunta dele embaixo: as barras viram uma linha de texto cada, sem sumir.

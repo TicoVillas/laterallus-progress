@@ -66,8 +66,9 @@ declare module 'claude-code' {
       agents: AgentBar[]
       agentsStepKey: string | null
       timeline: TimelineEntry[]
-      // Tokens do Claude na sessão (loop principal e subagentes): entrada + escrita em cache + saída.
-      sessionTokens: number
+      // Tokens da sessão (entrada + escrita em cache + saída): do Claude no loop principal e
+      // dos subagentes nativos, separados.
+      tokenTotals: { main: number; agents: number }
     }
   }
 }
